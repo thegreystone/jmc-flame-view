@@ -1,2 +1,2 @@
-# jmc-trace-view
-Foundation code to provide custom HTML based visualisation of stack traces in JMC
+# jmc-flame-view
+Community collaboration to provide a view that renders stacktrace selections as flame graphs in Mission Control.
