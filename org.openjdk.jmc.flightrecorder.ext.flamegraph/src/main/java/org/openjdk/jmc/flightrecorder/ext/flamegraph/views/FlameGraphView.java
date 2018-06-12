@@ -32,6 +32,7 @@
  */
 package org.openjdk.jmc.flightrecorder.ext.flamegraph.views;
 
+import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
 import java.util.logging.Level;
 
@@ -54,6 +55,7 @@ import org.openjdk.jmc.common.IMCFrame;
 import org.openjdk.jmc.common.IMCMethod;
 import org.openjdk.jmc.common.item.IItemCollection;
 import org.openjdk.jmc.common.util.FormatToolkit;
+import org.openjdk.jmc.common.util.StringToolkit;
 import org.openjdk.jmc.flightrecorder.stacktrace.FrameSeparator;
 import org.openjdk.jmc.flightrecorder.stacktrace.FrameSeparator.FrameCategorization;
 import org.openjdk.jmc.flightrecorder.stacktrace.StacktraceFrame;
@@ -156,10 +158,21 @@ public class FlameGraphView extends ViewPart implements ISelectionListener {
 	}
 
 	private void setViewerInput(Fork rootFork) {
-		browser.setText(toHtml(rootFork));
+		try {
+			System.out.println("Is JavaScript enabled? = " + browser.getJavascriptEnabled());
+			browser.execute("data.json = '" + toPlayJSon(rootFork) + "'");
+			browser.setText(StringToolkit.readString(FlameGraphView.class.getResourceAsStream("page.html")));
+		} catch (IOException e) {
+			browser.setText(e.getMessage());
+			e.printStackTrace();
+		}
 	}
 
-	private static String toHtml(Fork rootFork) {
+	private Object toPlayJSon(Fork rootFork) throws IOException {
+		return StringToolkit.readString(FlameGraphView.class.getResourceAsStream("test.json"));
+	}
+
+	private static String toJSon(Fork rootFork) {
 		if (rootFork == null) {
 			return "";
 		}
@@ -172,7 +185,6 @@ public class FlameGraphView extends ViewPart implements ISelectionListener {
 		return builder.toString();
 	}
 
-	
 	private static void addFlameData(StringBuilder builder, String parentFrameNames, Fork fork) {
 		for (Branch branch : fork.getBranches()) {
 			StacktraceFrame countedFrame = branch.getFirstFrame();
@@ -195,6 +207,7 @@ public class FlameGraphView extends ViewPart implements ISelectionListener {
 			addFlameData(builder, branchFrameNames + ";", endFork);
 		}
 	}
+
 	private static String format(StacktraceFrame sFrame) {
 		IMCFrame frame = sFrame.getFrame();
 		IMCMethod method = frame.getMethod();
