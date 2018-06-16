@@ -160,13 +160,13 @@ public class FlameGraphView extends ViewPart implements ISelectionListener {
 	}
 
 	private void setViewerInput(Fork rootFork) {
-		try {
+		try {			
 			browser.setText(StringToolkit.readString(FlameGraphView.class.getResourceAsStream("page.html")));
 			browser.addProgressListener(new ProgressAdapter() {
 				@Override
 				public void completed(ProgressEvent event) {
 					try {
-						browser.execute(String.format("processJson(%s);", toPlayJSon(rootFork)));
+						browser.execute(String.format("processGraph(%s);", toPlayJSon(rootFork)));
 					} catch (IOException e) {
 						// TODO Auto-generated catch block
 						e.printStackTrace();
