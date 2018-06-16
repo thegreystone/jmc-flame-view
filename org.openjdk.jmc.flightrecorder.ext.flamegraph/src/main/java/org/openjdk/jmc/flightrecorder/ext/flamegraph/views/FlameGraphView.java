@@ -43,6 +43,8 @@ import org.eclipse.jface.viewers.ISelection;
 import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.browser.Browser;
+import org.eclipse.swt.browser.ProgressAdapter;
+import org.eclipse.swt.browser.ProgressEvent;
 import org.eclipse.swt.custom.SashForm;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.ui.IMemento;
@@ -158,10 +160,20 @@ public class FlameGraphView extends ViewPart implements ISelectionListener {
 	}
 
 	private void setViewerInput(Fork rootFork) {
-		try {
-			System.out.println("Is JavaScript enabled? = " + browser.getJavascriptEnabled());
-			browser.execute("data.json = '" + toPlayJSon(rootFork) + "'");
+		try {			
 			browser.setText(StringToolkit.readString(FlameGraphView.class.getResourceAsStream("page.html")));
+			browser.addProgressListener(new ProgressAdapter() {
+				@Override
+				public void completed(ProgressEvent event) {
+					try {
+						browser.execute(String.format("processGraph(%s);", toPlayJSon(rootFork)));
+					} catch (IOException e) {
+						// TODO Auto-generated catch block
+						e.printStackTrace();
+					}
+				}
+				
+			});
 		} catch (IOException e) {
 			browser.setText(e.getMessage());
 			e.printStackTrace();
