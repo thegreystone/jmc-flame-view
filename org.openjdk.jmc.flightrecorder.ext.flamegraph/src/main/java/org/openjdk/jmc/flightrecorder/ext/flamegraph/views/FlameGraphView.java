@@ -33,9 +33,15 @@
 package org.openjdk.jmc.flightrecorder.ext.flamegraph.views;
 
 import java.io.IOException;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.logging.Level;
+import java.util.stream.Stream;
 
+import org.eclipse.jface.action.Action;
+import org.eclipse.jface.action.IAction;
 import org.eclipse.jface.action.IMenuManager;
 import org.eclipse.jface.action.IToolBarManager;
 import org.eclipse.jface.action.Separator;
@@ -53,41 +59,68 @@ import org.eclipse.ui.IViewSite;
 import org.eclipse.ui.IWorkbenchPart;
 import org.eclipse.ui.PartInitException;
 import org.eclipse.ui.part.ViewPart;
-import org.openjdk.jmc.common.IMCFrame;
-import org.openjdk.jmc.common.IMCMethod;
 import org.openjdk.jmc.common.item.IItemCollection;
-import org.openjdk.jmc.common.util.FormatToolkit;
 import org.openjdk.jmc.common.util.StringToolkit;
+import org.openjdk.jmc.flightrecorder.ext.flamegraph.tree.TraceNode;
+import org.openjdk.jmc.flightrecorder.ext.flamegraph.tree.TraceTreeUtils;
 import org.openjdk.jmc.flightrecorder.stacktrace.FrameSeparator;
 import org.openjdk.jmc.flightrecorder.stacktrace.FrameSeparator.FrameCategorization;
-import org.openjdk.jmc.flightrecorder.stacktrace.StacktraceFrame;
-import org.openjdk.jmc.flightrecorder.stacktrace.StacktraceModel;
-import org.openjdk.jmc.flightrecorder.stacktrace.StacktraceModel.Branch;
-import org.openjdk.jmc.flightrecorder.stacktrace.StacktraceModel.Fork;
 import org.openjdk.jmc.flightrecorder.ui.FlightRecorderUI;
+import org.openjdk.jmc.flightrecorder.ui.messages.internal.Messages;
+import org.openjdk.jmc.ui.CoreImages;
 import org.openjdk.jmc.ui.common.util.AdapterUtil;
 import org.openjdk.jmc.ui.handlers.MCContextMenuManager;
 import org.openjdk.jmc.ui.misc.DisplayToolkit;
 
 public class FlameGraphView extends ViewPart implements ISelectionListener {
-	private IItemCollection itemsToShow;
+	private static ExecutorService MODEL_EXECUTOR = Executors.newFixedThreadPool(1);
 	private FrameSeparator frameSeparator;
 
 	private Browser browser;
 	private SashForm container;
+	private TraceNode currentRoot;
+	private CompletableFuture<TraceNode> currentModelCalculator;
+	private boolean threadRootAtTop;
+	private IItemCollection currentItems;
+	private GroupByAction[] groupByActions;
+
+	private class GroupByAction extends Action {
+
+		private final boolean fromThreadRootAction;
+
+		GroupByAction(boolean fromRoot) {
+			super(fromRoot ? Messages.STACKTRACE_VIEW_THREAD_ROOT : Messages.STACKTRACE_VIEW_LAST_FRAME,
+					IAction.AS_RADIO_BUTTON);
+			fromThreadRootAction = fromRoot;
+			setToolTipText(fromRoot ? Messages.STACKTRACE_VIEW_GROUP_TRACES_FROM_ROOT
+					: Messages.STACKTRACE_VIEW_GROUP_TRACES_FROM_LAST_FRAME);
+			setImageDescriptor(fromRoot ? CoreImages.THREAD : CoreImages.METHOD_NON_OPTIMIZED);
+			setChecked(fromRoot == threadRootAtTop);
+		}
+
+		@Override
+		public void run() {
+			boolean newValue = isChecked() == fromThreadRootAction;
+			if (newValue != threadRootAtTop) {
+				threadRootAtTop = newValue;
+				rebuildModel(currentItems);
+			}
+		}
+	}
 
 	@Override
 	public void init(IViewSite site, IMemento memento) throws PartInitException {
 		super.init(site, memento);
 		frameSeparator = new FrameSeparator(FrameCategorization.METHOD, false);
+		groupByActions = new GroupByAction[] {new GroupByAction(false), new GroupByAction(true)};
+
 		//methodFormatter = new MethodFormatter(null, () -> viewer.refresh());
 		IMenuManager siteMenu = site.getActionBars().getMenuManager();
 		siteMenu.add(new Separator(MCContextMenuManager.GROUP_TOP));
 		siteMenu.add(new Separator(MCContextMenuManager.GROUP_VIEWER_SETUP));
 		// addOptions(siteMenu);
 		IToolBarManager toolBar = site.getActionBars().getToolBarManager();
-		toolBar.add(new Separator());
-		toolBar.add(new Separator());
+		Stream.of(groupByActions).forEach(toolBar::add);
 		getSite().getPage().addSelectionListener(this);
 	}
 
@@ -117,62 +150,57 @@ public class FlameGraphView extends ViewPart implements ISelectionListener {
 	public void selectionChanged(IWorkbenchPart part, ISelection selection) {
 		if (selection instanceof IStructuredSelection) {
 			Object first = ((IStructuredSelection) selection).getFirstElement();
-			IItemCollection items = AdapterUtil.getAdapter(first, IItemCollection.class);
-			if (items != null && !items.equals(itemsToShow)) {
-				setItems(items);
-			}
+			setItems(AdapterUtil.getAdapter(first, IItemCollection.class));
 		}
 	}
 
 	private void setItems(IItemCollection items) {
-		itemsToShow = items;
-		rebuildModel();
-	}
-
-	private StacktraceModel createStacktraceModel() {
-		return new StacktraceModel(false, frameSeparator, itemsToShow);
-	}
-
-	private void rebuildModel() {
-		// Release old model before building the new
-		setViewerInput(null);
-		CompletableFuture<StacktraceModel> modelPreparer = getModelPreparer(createStacktraceModel(), true);
-		modelPreparer.thenAcceptAsync(this::setModel, DisplayToolkit.inDisplayThread())
-				.exceptionally(FlameGraphView::handleModelBuildException);
-	}
-
-	private static CompletableFuture<StacktraceModel> getModelPreparer(
-		StacktraceModel model, boolean materializeSelectedBranches) {
-		return CompletableFuture.supplyAsync(() -> {
-			return model;
-		});
-	}
-
-	private static Void handleModelBuildException(Throwable ex) {
-		FlightRecorderUI.getDefault().getLogger().log(Level.SEVERE, "Failed to build stacktrace view model", ex); //$NON-NLS-1$
-		return null;
-	}
-
-	private void setModel(StacktraceModel model) {
-		if (!browser.isDisposed()) {
-			setViewerInput(model.getRootFork());
+		if (items != null) {
+			currentItems = items;
+			rebuildModel(items);
 		}
 	}
 
-	private void setViewerInput(Fork rootFork) {
-		try {			
+	private void rebuildModel(IItemCollection items) {
+		// Release old model before building the new
+		if (currentModelCalculator != null) {
+			currentModelCalculator.cancel(true);
+		}
+		currentModelCalculator = getModelPreparer(items, frameSeparator, true);
+		currentModelCalculator.thenAcceptAsync(this::setModel, DisplayToolkit.inDisplayThread())
+				.exceptionally(FlameGraphView::handleModelBuildException);
+	}
+
+	private CompletableFuture<TraceNode> getModelPreparer(
+		final IItemCollection items, final FrameSeparator separator, final boolean materializeSelectedBranches) {
+		return CompletableFuture.supplyAsync(() -> {
+			return TraceTreeUtils.createTree(items, separator, threadRootAtTop, "-- Click me to reset! --");
+		}, MODEL_EXECUTOR);
+	}
+
+	private static Void handleModelBuildException(Throwable ex) {
+		if (!(ex.getCause() instanceof CancellationException)) {
+			FlightRecorderUI.getDefault().getLogger().log(Level.SEVERE, "Failed to build stacktrace view model", ex); //$NON-NLS-1$
+		}
+		return null;
+	}
+
+	private void setModel(TraceNode root) {
+		if (!browser.isDisposed() && !root.equals(currentRoot)) {
+			currentRoot = root;
+			setViewerInput(root);
+		}
+	}
+
+	private void setViewerInput(TraceNode root) {
+		try {
 			browser.setText(StringToolkit.readString(FlameGraphView.class.getResourceAsStream("page.html")));
 			browser.addProgressListener(new ProgressAdapter() {
 				@Override
 				public void completed(ProgressEvent event) {
-					try {
-						browser.execute(String.format("processGraph(%s);", toPlayJSon(rootFork)));
-					} catch (IOException e) {
-						// TODO Auto-generated catch block
-						e.printStackTrace();
-					}
+					browser.removeProgressListener(this);
+					browser.execute(String.format("processGraph(%s);", toJSon(root)));
 				}
-				
 			});
 		} catch (IOException e) {
 			browser.setText(e.getMessage());
@@ -180,49 +208,41 @@ public class FlameGraphView extends ViewPart implements ISelectionListener {
 		}
 	}
 
-	private Object toPlayJSon(Fork rootFork) throws IOException {
-		return StringToolkit.readString(FlameGraphView.class.getResourceAsStream("test.json"));
-	}
-
-	private static String toJSon(Fork rootFork) {
-		if (rootFork == null) {
+	private static String toJSon(TraceNode root) {
+		if (root == null) {
 			return "";
 		}
-		return render(rootFork);
+		return render(root);
 	}
 
-	private static String render(Fork rootFork) {
+	private static String render(TraceNode root) {
 		StringBuilder builder = new StringBuilder();
-		addFlameData(builder, "", rootFork);
+		render(builder, root);
 		return builder.toString();
 	}
 
-	private static void addFlameData(StringBuilder builder, String parentFrameNames, Fork fork) {
-		for (Branch branch : fork.getBranches()) {
-			StacktraceFrame countedFrame = branch.getFirstFrame();
-			int itemCount = countedFrame.getItemCount();
-			String branchFrameNames = parentFrameNames + format(branch.getFirstFrame());
-			for (StacktraceFrame tailFrame : branch.getTailFrames()) {
-				// Look for non-branching leafs
-				if (tailFrame.getItemCount() < itemCount) {
-					builder.append(branchFrameNames + " " + (itemCount - tailFrame.getItemCount()));
-					countedFrame = tailFrame;
-					itemCount = tailFrame.getItemCount();
-				}
-				branchFrameNames = branchFrameNames + ";" + format(tailFrame);
+	private static void render(StringBuilder builder, TraceNode node) {
+		String start = String.format("{%s,%s, \"children\": [ ", toJSonKeyValue("name", node.getName()),
+				toJSonKeyValue("value", String.valueOf(node.getValue())));
+		builder.append(start);
+		for (int i = 0; i < node.getChildren().size(); i++) {
+			render(builder, node.getChildren().get(i));
+			if (i < node.getChildren().size() - 1) {
+				builder.append(",");
 			}
-			Fork endFork = branch.getEndFork();
-			if (itemCount - endFork.getItemsInFork() > 0) {
-				// No need to print forking frame if it is not a leaf
-				builder.append(branchFrameNames + " " + (itemCount - endFork.getItemsInFork()));
-			}
-			addFlameData(builder, branchFrameNames + ";", endFork);
 		}
+		builder.append("]}");
 	}
 
-	private static String format(StacktraceFrame sFrame) {
-		IMCFrame frame = sFrame.getFrame();
-		IMCMethod method = frame.getMethod();
-		return FormatToolkit.getHumanReadable(method);
+	private static String toJSonKeyValue(String key, String value) {
+		return "\"" + key + "\": " + "\"" + value + "\"";
+	}
+
+	private String testJSon() {
+		try {
+			return StringToolkit.readString(FlameGraphView.class.getResourceAsStream("test.json"));
+		} catch (IOException e) {
+			return "Could not load test JSon";
+		}
 	}
 }

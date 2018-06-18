@@ -6,7 +6,7 @@
           allowMultiple="false"
           category="org.openjdk.jmc.ui.main"
           class="org.openjdk.jmc.flightrecorder.ext.flamegraph.views.FlameGraphView"
-          icon="icons/flamegraph.png"
+          icon="icons/flame.png"
           id="org.openjdk.jmc.flightrecorder.ext.flamegraph.views.FlameGraphView"
           name="Flame Graph"
           restorable="true">
