@@ -1,6 +1,9 @@
 # jmc-flame-view
 Community collaboration to provide a view that renders stacktrace selections as flame graphs in Mission Control.
 
+* Note that this code is now contributed to the JMC project.*
+For the latest version, check the JDK Mission Control repo at https://github.com/openjdk/jmc.
+
 [![Flame Graph View Example](http://hirt.se/images/github/flamechart_small.gif)](https://www.youtube.com/watch?v=vVh_z34Gtn8)
 
 This plug-in should provide a good example for how to use JavaScript visualization technologies to render complex information from java flight recordings in JDK Mission Control.
