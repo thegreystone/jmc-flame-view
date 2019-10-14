@@ -17,7 +17,7 @@ To start working on the flame-view, and to test the flame-view:
 To use the view in JMC:
 
 1. Go to Window | Show View | Other...
-2. Select Mission Control / Flame Graph
+2. Select Mission Control / Flame View
 3. Put the view where you want it, and select something in the UI that normally has a stack trace aggregate, for example something from the Memory page, or something from the Method Profiling page
 
 For more detailed instructions on how to get going, see [http://hirt.se/blog/?p=989]().
